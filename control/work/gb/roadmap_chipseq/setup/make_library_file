@@ -1,0 +1,50 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+
+from pprint import pprint
+import collections
+import os
+import sys
+import re
+
+
+samples_file = sys.argv[1]
+samples = []
+with open(samples_file, 'r') as f:
+    for line in f:
+        if 'input_srr' in line: # header
+            continue
+        line = line.rstrip().split('\t')
+        assert('GSM' in line[0])
+        samples.append(line[0])
+
+
+def bedgraph_path(sample):
+    return os.path.join(os.getenv('DANFORTH_HOME'), 'work', 'roadmap_chipseq', 'results', 'macs2', '{}.broad_treat_pileup.bdg'.format(sample))
+
+
+def get_macs2_out(sample):
+    return os.path.join(os.getenv('DANFORTH_HOME'), 'work', 'roadmap_chipseq', 'results', 'macs2', '{}.macs2.out'.format(sample))
+
+
+LIBRARIES = {}
+
+for sample in samples:
+
+    unique_id = sample
+
+    assert(unique_id not in LIBRARIES)
+    if unique_id not in LIBRARIES:
+        sample_information = {
+            'bedgraph': bedgraph_path(unique_id),
+            'genome': 'hg19',
+            'macs2_out': get_macs2_out(unique_id),
+        }
+
+        LIBRARIES[unique_id] = sample_information
+
+
+# now print the dictionary
+LIBRARIES = collections.OrderedDict(sorted(LIBRARIES.items()))
+pprint(dict(LIBRARIES.items()), width=1)

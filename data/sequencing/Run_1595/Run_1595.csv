@@ -1,0 +1,27 @@
+[Header],,,,,,,,,
+IEMFileVersion,4,,,,,,,,
+Investigator Name,keegan,,,,,,,,
+Experiment Name,Run_1595,,,,,,,,
+Date,Jul 22 2016  6:55AM,,,,,,,,
+Workflow,GenerateFASTQ,,,,,,,,
+Application,HiSeq FASTQ Only,,,,,,,,
+Assay,TruSeq LT,,,,,,,,
+Description,Run_1595,,,,,,,,
+Chemistry,Default,,,,,,,,
+,,,,,,,,,
+[Reads],,,,,,,,,
+151,,,,,,,,,
+151,,,,,,,,,
+,,,,,,,,,
+[Settings],,,,,,,,,
+,,,,,,,,,
+[Data],,,,,,,,,
+Lane,Sample_ID,Sample_Name,Sample_Plate,Sample_Well,I7_Index_ID,index,index2,Sample_Project,Description
+6,Sample_66835,66835_AGGCAGAA,,,,AGGCAGAA,,keegan,ATAC-seq-mousekk016
+6,Sample_66836,66836_TCCTGAGC,,,,TCCTGAGC,,keegan,ATAC-seq-mousekk017
+6,Sample_66837,66837_GGACTCCT,,,,GGACTCCT,,keegan,ATAC-seq-mousekk018
+6,Sample_66838,66838_TAGGCATG,,,,TAGGCATG,,keegan,ATAC-seq-mousekk019
+6,Sample_66839,66839_CGAGGCTG,,,,CGAGGCTG,,keegan,ATAC-seq-mousekk023
+6,Sample_66840,66840_AAGAGGCA,,,,AAGAGGCA,,keegan,ATAC-seq-mousekk024
+6,Sample_66841,66841_GTAGAGGA,,,,GTAGAGGA,,keegan,ATAC-seq-mousekk025
+6,Sample_66842,66842_GTCGTGAT,,,,GTCGTGAT,,keegan,ATAC-seq-mousekk026

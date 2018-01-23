@@ -1,0 +1,32 @@
+ROOT="${DANFORTH_HOME}"
+ANALYSIS_DIR="${ROOT}/figures/h3k4me1_barplot"
+
+mkdir -p $ANALYSIS_DIR && cd $ANALYSIS_DIR
+cat ${ROOT}/work/differential_peaks/results/deseq2/differential_peaks.deseq2_results.txt | grep -i Gm13344 | grep 'sign.' | cut -f1 | perl -pe 's/:/\t/g; s/\n$/\tgm13344_promoter_peak\n/' > gm13344_promoter_peak.mm9.bed
+
+
+# liftover the promoter peak
+INPUT_BED="gm13344_promoter_peak.mm9.bed"
+OUTPUT_BED="gm13344_promoter_peak.hg19.bed"
+CHAIN_FILE="${ROOT}/data/chain/mm9ToHg19.over.chain.gz"
+bnMapper.py $INPUT_BED $CHAIN_FILE | bedtools merge -d 30 > $OUTPUT_BED
+
+# Get the signal
+rm -rf all_signals.bed
+# Developing Pancreas 1 did not pass QC, remove it.
+#printf "DevelopingPancreas_1\t" >> all_signals.bed
+#measure_features -n 0 -s mean ${ROOT}/work/gb/weedon_chipseq/results/bigwig/H3K4me1.1_treat_pileup.normalized.bw $OUTPUT_BED >> all_signals.bed
+printf "DevelopingPancreas\t" >> all_signals.bed
+measure_features -n 0 -s mean ${ROOT}/work/gb/weedon_chipseq/results/bigwig/H3K4me1.2_treat_pileup.normalized.bw $OUTPUT_BED >> all_signals.bed
+
+for i in `ls ${ROOT}/work/gb/roadmap_chipseq/results/bigwig/*`
+do
+	gsm=$(basename $i | perl -pe 's/^(GSM\d+)_treat_pileup.normalized.bw$/$1/')
+	printf "$gsm\t" >> all_signals.bed
+	measure_features -n 0 -s mean ${i} $OUTPUT_BED >> all_signals.bed
+done
+
+cat all_signals.bed | grep -v -w -e "GSM1059449" -e "GSM1120350" -e "GSM956019" > all_signals.tmp; mv all_signals.tmp all_signals.bed
+
+# make the barplot
+Rscript ${ROOT}/src/h3k4me1_barplot.R

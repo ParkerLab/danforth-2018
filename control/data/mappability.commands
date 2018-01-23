@@ -1,0 +1,12 @@
+mkdir -p mappability && cd mappability
+echo "Downloading mm9 blacklist..."
+wget http://mitra.stanford.edu/kundaje/akundaje/release/blacklists/mm9-mouse/mm9-blacklist.bed.gz
+echo "Downloading hg19 blacklists..."
+wget http://hgdownload.cse.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeMapability/wgEncodeDacMapabilityConsensusExcludable.bed.gz
+wget http://hgdownload.cse.ucsc.edu/goldenPath/hg19/encodeDCC/wgEncodeMapability/wgEncodeDukeMapabilityRegionsExcludable.bed.gz
+
+echo "Creating danforth blacklist..."
+zcat mm9-blacklist.bed.gz > mm9-unzipped.bed
+python ${DANFORTH_HOME}/src/mm9_bed_to_danforth.py mm9-unzipped.bed | gzip > danforth-blacklist.bed.gz
+rm mm9-unzipped.bed
+cd ..

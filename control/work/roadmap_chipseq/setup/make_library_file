@@ -1,0 +1,57 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+
+from pprint import pprint
+import collections
+import os
+import sys
+import re
+
+sample_info = sys.argv[1]
+
+# create a dict containing, for each H3K4me1 experiment:
+# key is GSM identifier
+# value is a dict, with the following keys:
+# 'SRR'
+# 'donor_id'
+# 'input_control' (a dict, with key 'SRR')
+
+
+LIBRARIES = {}
+
+with open(sample_info, 'r') as f:
+    header_line = None
+    for line in f:
+        line_l = line.rstrip().split('\t')
+        if header_line is None:
+            if line_l[0] == 'gsm':
+                header_line = line.rstrip()
+                continue
+            else:
+                continue
+
+        parsed_line = dict(zip(header_line.split('\t'), line_l))  # e.g. d['gsm'] --> GSMXXXXXX, d['srr'] = 'SRRXXXXX' ...
+
+        gsm = parsed_line['gsm']
+        srr = parsed_line['srr']
+        donor_id = parsed_line['donor']
+        input_control = parsed_line['input_srr']
+
+        unique_id = gsm
+        genome = 'hg19'
+            
+        if unique_id not in LIBRARIES:
+            sample_information = {
+                'SRR': srr,
+                'donor_id': donor_id,
+                'genome': genome,
+                'input_control': {'SRR': input_control}
+            }
+
+            LIBRARIES[unique_id] = sample_information
+
+
+# now print the dictionary
+LIBRARIES = collections.OrderedDict(sorted(LIBRARIES.items()))
+pprint(dict(LIBRARIES.items()), width=1)

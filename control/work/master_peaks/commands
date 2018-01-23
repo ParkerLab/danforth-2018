@@ -1,0 +1,112 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+
+import collections
+import datetime
+import functools
+import os
+import math
+import re
+import sys
+
+from john_utilities import mkdir, symlink
+from load_pprint_dict import load_pprint_dict
+
+ROOT = os.getenv('DANFORTH_HOME')
+ANALYSIS_PATH = os.path.join(ROOT, 'work', "master_peaks")
+WORK_PATH = os.path.join(ANALYSIS_PATH, 'results')
+PIPELINE = os.path.join(ANALYSIS_PATH, 'pipeline')
+
+MASTER_PEAKS_DIR = os.path.join(WORK_PATH, 'master_peaks')
+VERSION_DIR = os.path.join(WORK_PATH, 'versions')
+
+PEAK_FDR = 0.05
+
+DATA = load_pprint_dict('libraries')
+
+#
+# The following are generic support functions. They shouldn't need
+# tweaking, but feel free.
+#
+
+def print_to_pipeline(pipeline_file, text=None, timed=False, ioniced=False):
+    """The primary function of all this: writing to a drmr script."""
+    if text:
+        if timed:
+            pipeline_file.write('/usr/bin/time -v ')
+        if ioniced:
+            pipeline_file.write('ionice -c2 -n7 ')
+        pipeline_file.write(text)
+        pipeline_file.write('\n')
+
+#
+#  End of generic, beginning of analysis-specific functions.
+#
+
+
+def get_original_bam(library):
+    return DATA[library]['bam']
+
+
+def get_peak_list(library):
+    return DATA[library]['peaks']
+
+
+def master_peaks():
+
+    printp("""\n#\n# Get the master peaks that will be used for comparing experiments\n#\n""")
+    printp("""# drmr:label master-peaks\n""")
+    printp("""\n# drmr:job working_directory={} processors=1 time_limit=1h\n""".format(MASTER_PEAKS_DIR))
+
+    fdr = str(-1 * math.log10(PEAK_FDR))
+
+    peak_files = ' '.join([get_peak_list(sample) for sample in DATA])
+
+    command = "cat {}".format(peak_files)
+    command += " | awk '{" + "if($9>={})".format(fdr) + "{print}}' "
+    command += " | sort -k1,1 -k2n,2 | bedtools merge | sort -k1,1V -k2n,2 > master_peaks.bed".format(**locals())
+    printp(command, ioniced = False)
+    printp("""\n# drmr:wait""")
+
+    printp("""# drmr:label read-counts\n""")
+    printp("""\n# drmr:job working_directory={} processors=1 time_limit=3h memory=4g\n""".format(MASTER_PEAKS_DIR))
+
+    for sample in DATA:
+        bam = get_original_bam(sample)
+        command = "coverageBed -counts -sorted -a master_peaks.bed -b {bam} > {sample}.counts.bed".format(**locals())
+        printp(command, ioniced = True)
+
+    printp("""\n# drmr:wait""")
+
+
+def versions():
+    """Print the versions of the software used"""
+
+    mkdir(VERSION_DIR)
+
+    printp("""\n#\n# Print versions of the software used\n#""")
+    printp("""\n# drmr:label versions""")
+    printp("""\n# drmr:job time_limit=00:01:00 working_directory={} memory=1g processors=1""".format(VERSION_DIR))
+
+    printp("bedtools --version &> bedtools.version")
+    
+    printp("""\n# drmr:wait""")
+
+
+if __name__ == '__main__':
+
+    mkdir(WORK_PATH)
+    mkdir(MASTER_PEAKS_DIR)
+
+    if os.path.exists(PIPELINE):
+        os.unlink(PIPELINE)
+
+    PIPELINE_FILE = open(PIPELINE, 'w')
+    printp = functools.partial(print_to_pipeline, PIPELINE_FILE)
+
+    printp("""#!bash""")
+    printp("""# -*- mode: sh; coding: utf-8 -*-\n""")
+
+    master_peaks()
+    versions()

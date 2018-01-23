@@ -1,0 +1,10 @@
+ROOT=${DANFORTH_HOME}
+SCRIPT="${ROOT}/src/atacseq_and_rnaseq_volcano_plots.R"
+
+OUT_DIR="${DANFORTH_HOME}/figures/atacseq_and_rnaseq_volcano_plots"
+BASENAME="atacseq_and_rnaseq_volcano_plot.png"
+RNASEQ="${ROOT}/work/differential_gene_expression/results/deseq2/differential_gene_expression.deseq2_results.txt"
+ATACSEQ="${ROOT}/work/differential_peaks/results/deseq2/differential_peaks.deseq2_results.txt"
+
+mkdir -p $OUT_DIR
+Rscript ${SCRIPT} $RNASEQ $ATACSEQ ${OUT_DIR}/${BASENAME}

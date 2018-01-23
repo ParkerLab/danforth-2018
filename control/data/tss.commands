@@ -1,0 +1,1 @@
+mkdir -p tss/refseq && cd tss/refseq && mysql --host=genome-mysql.cse.ucsc.edu --user=genome -D mm9 -e "SELECT * FROM refGene" > mm9.tss.refseq.tsv && mktss --coding mm9.tss.refseq.tsv > mm9.tss.refseq.bed && rm mm9.tss.refseq.tsv && python ${DANFORTH_HOME}/src/mm9_bed_to_danforth.py mm9.tss.refseq.bed > danforth.tss.refseq.bed && cd ..

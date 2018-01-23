@@ -1,0 +1,10 @@
+ROOT=$DANFORTH_HOME
+
+WORK="${ROOT}/work/go/results"
+
+DESEQ2_RESULTS="${ROOT}/work/differential_gene_expression/results/deseq2/differential_gene_expression.deseq2_results.txt"
+RNAENRICH="${ROOT}/sw/rnaenrich/RNA-Enrich.r"
+ENTREZ_TO_ENSEMBL="${ROOT}/data/entrez_to_ensembl/entrez2ensembl.gz"
+PREFIX="danforth"
+
+mkdir -p ${WORK} && cd ${WORK} && Rscript ${ROOT}/src/GO.R --deseq2_results $DESEQ2_RESULTS --rnaenrich $RNAENRICH --entrez_to_ensembl $ENTREZ_TO_ENSEMBL --prefix $PREFIX &> GO.out

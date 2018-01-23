@@ -1,0 +1,1 @@
+../../../roadmap_chipseq/setup/sample_info.txt

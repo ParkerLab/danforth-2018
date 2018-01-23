@@ -1,0 +1,43 @@
+#!/usr/bin/env python
+
+import argparse
+import csv
+import textwrap
+
+
+parser = argparse.ArgumentParser(
+    prog='mktss',
+    formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    description=textwrap.dedent("""
+    Given a refGene TSV dumped from the UCSC Table Browser with all fields from the selected
+    table (very important because of their first line syntax weakness), produce a BED file
+    with one TSS per unique tuple of (chrom, strand, and TSS position).
+    """) + '\n\n'
+)
+
+parser.add_argument('-e', '--extension', type=int, default=0, help='The number of bases to extend around the TSS.')
+parser.add_argument('-c', '--coding', action='store_true', help='Only include protein-coding genes (whose names start with NM_).')
+parser.add_argument('tsv_file', help='The TSV file from the UCSC Table Browser.')
+args = parser.parse_args()
+
+tss = {}
+tsv_file = open(args.tsv_file)
+tsv = csv.DictReader(tsv_file, dialect='excel-tab')
+for row in tsv:
+    if args.coding and row['name'][:3] != 'NM_':
+        continue
+
+    tx_start = int(row['txStart'])
+    tx_end = int(row['txEnd'])
+    if row['strand'] == '-':
+        tx_start = tx_end - 1 - args.extension
+        tx_end = tx_start + 1 + args.extension
+    else:
+        tx_end = tx_start + 1 + args.extension
+        tx_start -= args.extension
+
+    keytuple = (row['chrom'], tx_start, row['strand'])
+    tss[keytuple] = '\t'.join(map(str, [row['chrom'], tx_start, tx_end, row['name2'], row['score'], row['strand']]))
+
+for keytuple, line in sorted(tss.items()):
+    print(line)

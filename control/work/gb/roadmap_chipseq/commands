@@ -1,0 +1,130 @@
+#!/usr/bin/env python
+
+import re
+import os
+import contextlib
+import functools
+
+from john_utilities import mkdir, symlink
+from load_pprint_dict import load_pprint_dict
+
+# Paths for this analysis
+ROOT = os.getenv('DANFORTH_HOME')
+ANALYSIS_PATH = os.path.join(ROOT, 'work', 'gb', 'roadmap_chipseq')
+WORK_PATH = os.path.join(ANALYSIS_PATH, 'results')
+PIPELINE = os.path.join(ANALYSIS_PATH, 'pipeline')
+
+BEDGRAPH_DIR = os.path.join(WORK_PATH, 'bedgraph')  # bam --> wig
+BIGWIG_DIR = os.path.join(WORK_PATH, 'bigwig')  # wig --> bw
+VERSION_DIR = os.path.join(WORK_PATH, 'versions')
+
+CHROMOSOME_SIZES = {
+        'mm9' : os.path.join(ROOT, 'data', 'chrom_sizes', 'mm9.chrom.sizes'),
+        'hg19' : os.path.join(ROOT, 'data', 'chrom_sizes', 'male.hg19.chrom.sizes')
+}
+
+SAMPLES = load_pprint_dict('libraries') 
+
+def print_to_pipeline(pipeline_file, text=None, timed=False, ioniced=False):
+    """The primary function of all this: writing to a drmr script."""
+    if text:
+        if timed:
+            pipeline_file.write('/usr/bin/time -v ')
+        if ioniced:
+            pipeline_file.write('ionice -c 2 -n 7 ')
+        pipeline_file.write(text)
+        pipeline_file.write('\n')
+
+
+def get_genome(sample):
+    return SAMPLES[sample]['genome']
+
+
+def get_macs2_out(sample):
+    return SAMPLES[sample]['macs2_out']
+
+
+def get_macs2_treat_pileup_bdg(sample):
+    return SAMPLES[sample]['bedgraph']
+
+
+def get_chromosome_size_file(genome):
+    return CHROMOSOME_SIZES[genome]
+
+
+def get_normalized_treat_pileup_bdg(sample):
+    return os.path.join(BEDGRAPH_DIR, '{}_treat_pileup.normalized.bdg'.format(sample))
+
+
+def get_normalized_treat_pileup_bw(sample):
+    return os.path.join(BIGWIG_DIR, '{}_treat_pileup.normalized.bw'.format(sample))
+
+def normalize_macs2_treatment_pileups():
+    """Normalize MACS2 treatment pileup bedgraph files to 10 million fragments"""
+
+    printp("""\n#\n# Normalize MACS2 treatment pileup bedgraph files\n#""")
+    printp("""\n# drmr:label normalize-macs2-treatment-pileup""")
+    printp("""\n# drmr:job time_limit=1h working_directory={} processors=1""".format(BEDGRAPH_DIR))
+
+    template = """test -r {macs2_output_file} && (cat {macs2_treat_pileup_bdg} | awk -v NTAGS=$(grep 'total tags in treatment' {macs2_output_file} | awk '{{print $NF}}') '{{$4=$4*(10000000/NTAGS); print}}' | perl -pe 's/\\s+/\\t/g; s/$/\\n/' | grep -v '_' | LC_COLLATE=C sort -k1,1 -k2,2n > {macs2_normalized_treat_pileup_bdg}) || exit 1"""
+
+    NTAGS_RE = re.compile('total tags in treatment: (\d+)')
+    for sample in SAMPLES:
+        macs2_output_file = get_macs2_out(sample)
+        macs2_treat_pileup_bdg = get_macs2_treat_pileup_bdg(sample)
+        macs2_normalized_treat_pileup_bdg = get_normalized_treat_pileup_bdg(sample)
+        printp(template.format(**locals()))
+
+    printp("""\n# drmr:wait""")
+
+
+def make_macs2_treatment_pileup_bigwigs():
+    """Make bigwig files from the MACS2 treatment pileup bedgraph files"""
+
+    printp("""\n#\n# Generate bigwig files from MACS2 treatment pileups\n#""")
+    printp("""\n# drmr:label macs2-treatment-pileup-bigwig""")
+    printp("""\n# drmr:job time_limit=1h working_directory={} processors=1""".format(BIGWIG_DIR))
+
+    template = """bedGraphToBigWig {macs2_normalized_treat_pileup_bdg} {chromosome_sizes} {macs2_normalized_treat_pileup_bw}"""
+
+    for sample in SAMPLES:
+        chromosome_sizes = get_chromosome_size_file(get_genome(sample))
+        macs2_normalized_treat_pileup_bdg = get_normalized_treat_pileup_bdg(sample)
+        macs2_normalized_treat_pileup_bw = get_normalized_treat_pileup_bw(sample)
+        printp(template.format(**locals()), ioniced=True)
+
+    printp("""\n# drmr:wait""")
+
+
+def versions():
+    """Print the versions of the software used"""
+
+    mkdir(VERSION_DIR)
+
+    printp("""\n#\n# Print versions of the software used\n#""")
+    printp("""\n# drmr:label versions""")
+    printp("""\n# drmr:job time_limit=00:01:00 working_directory={} memory=1g processors=1""".format(VERSION_DIR))
+
+    printp("bedGraphToBigWig &> bedGraphToBigWig.version")
+                                                            
+    printp("""\n# drmr:wait""")
+
+
+if __name__ == '__main__':
+
+    mkdir(WORK_PATH)
+    mkdir(BEDGRAPH_DIR)
+    mkdir(BIGWIG_DIR)
+
+    if os.path.exists(PIPELINE):
+        os.unlink(PIPELINE)
+
+    PIPELINE_FILE = open(PIPELINE, 'w')
+    printp = functools.partial(print_to_pipeline, PIPELINE_FILE)
+
+    printp("""#!/bin/bash""")
+    printp("""# -*- mode: sh; coding: utf-8 -*-\n""")
+
+    normalize_macs2_treatment_pileups()
+    make_macs2_treatment_pileup_bigwigs()
+    versions()

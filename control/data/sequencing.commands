@@ -1,0 +1,5 @@
+echo "Preparing sequencing data"
+mkdir -p sequencing && cd sequencing
+mkdir -p Run_1595 && cd Run_1595 && cd .. # TODO once GEO submission is public: download data here
+mkdir -p Run_1625 && cd Run_1625 && cd .. # TODO once GEO submission is public: download data here
+cd ..

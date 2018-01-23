@@ -1,0 +1,6 @@
+mkdir -p chrom_sizes && cd chrom_sizes
+echo "Downloading hg19 chromosome size file..."
+wget http://hgdownload-test.cse.ucsc.edu/goldenPath/hg19/encodeDCC/referenceSequences/male.hg19.chrom.sizes
+echo "Downloading mm9 chromosome size file..."
+wget ftp://hgdownload.cse.ucsc.edu/goldenPath/mm9/bigZips/mm9.chrom.sizes
+cd ..

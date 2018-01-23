@@ -1,0 +1,181 @@
+#!/usr/bin/env python
+
+import os
+import contextlib
+import functools
+
+# from subprocess import call
+from john_utilities import mkdir, symlink
+from load_pprint_dict import load_pprint_dict
+
+# This pipeline is used for creating track hubs for stranded
+# RNA-seq data processed by QoRTs
+
+QORTS_JAR = os.getenv('QORTS_JAR')
+
+# Paths for this analysis
+ROOT = os.getenv('DANFORTH_HOME')
+ANALYSIS_PATH = os.path.join(ROOT, 'work', 'gb', 'rnaseq')
+WORK_PATH = os.path.join(ANALYSIS_PATH, 'results')
+PIPELINE = os.path.join(ANALYSIS_PATH, 'pipeline')
+
+WIGGLE_DIR = os.path.join(WORK_PATH, 'wiggle')  # bam --> wig
+BIGWIG_DIR = os.path.join(WORK_PATH, 'bigwig')  # wig --> bw
+CONFIG_DIR = os.path.join(WORK_PATH, 'config')  # where genomes.txt, hub.txt, trackDB.txt, install.sh will show up
+VERSION_DIR = os.path.join(WORK_PATH, 'versions')  # where software versions are recorded
+
+CHROMOSOME_SIZES = {
+    'mm9': os.path.join(ROOT, 'data', 'chrom_sizes', 'mm9.chrom.sizes'),
+    'danforth': os.path.join(ROOT, 'data', 'chrom_sizes', 'danforth.chrom.sizes'),
+    'hg19': os.path.join(ROOT, 'data', 'chrom_sizes', 'male.hg19.chrom.sizes')
+}
+
+
+# Genome browser hub settings
+GENOME = os.getenv('DANFORTH_RNASEQ_GENOME')
+POSITIVE_STRAND_RGB = '85,149,212'
+NEGATIVE_STRAND_RGB = '85,85,212'
+
+## For hub.txt
+HUB_NAME = 'RNA-seq'
+HUB_SHORT_LABEL = 'RNA-seq'
+HUB_LONG_LABEL = 'Stranded RNA-seq data from Danforth and WT mice'
+GENOMES_FILE = 'genomes.txt'
+EMAIL = 'porchard@umich.edu'
+
+## For trackDb.txt
+TRACK_PRIORITY = 3
+
+# For each sample, need:
+# track name ('track')
+# short label (shows up to the left on the genome browser)
+# long label (shows up when hovering over the track on the genome browser)
+
+
+SAMPLES = load_pprint_dict('libraries')
+
+def print_to_pipeline(pipeline_file, text=None, timed=False, ioniced=False):
+    """The primary function of all this: writing to a drmr script."""
+    if text:
+        if timed:
+            pipeline_file.write('/usr/bin/time -v ')
+        if ioniced:
+            pipeline_file.write('ionice -c 2 -n 7 ')
+        pipeline_file.write(text)
+        pipeline_file.write('\n')
+
+
+def get_chromosome_size_file(genome):
+    return CHROMOSOME_SIZES[genome]
+
+
+if __name__ == '__main__':
+
+    mkdir(WORK_PATH)
+
+    mkdir(WIGGLE_DIR)
+    mkdir(BIGWIG_DIR)
+    mkdir(CONFIG_DIR)
+    mkdir(VERSION_DIR)
+
+    if os.path.exists(PIPELINE):
+        os.unlink(PIPELINE)
+
+    PIPELINE_FILE = open(PIPELINE, 'w')
+    printp = functools.partial(print_to_pipeline, PIPELINE_FILE)
+
+    printp("""#!/bin/bash""")
+    printp("""# -*- mode: sh; coding: utf-8 -*-\n""")
+
+    # bamToWiggle
+    printp("""# drmr:label bam-to-wiggle\n\n""")
+    printp("""# drmr:job working_directory={} memory=30g\n\n""".format(WIGGLE_DIR))
+
+    chrnamelength = get_chromosome_size_file(GENOME)
+
+    bam_to_wiggle_template = ('java -jar {qorts_jar} bamToWiggle '
+                            '--omitTrackDefLine --negativeReverseStrand '
+                            '--sizefactor {size_factor} '
+                            '--stranded {bam} '
+                            '{sample} {chrnamelength} {prefix}')
+
+    for sample, info in SAMPLES.items():
+        qorts_jar = QORTS_JAR
+        size_factor = info['size_factor']
+        bam = info['bam']
+        prefix = sample
+        printp(bam_to_wiggle_template.format(**locals()))
+
+    printp("""# drmr:wait\n\n\n""")
+
+
+    # wigToBigWig
+    printp("""# drmr:label wiggle-to-bigwig\n\n""")
+    printp("""# drmr:job working_directory={} memory=30g\n\n""".format(BIGWIG_DIR))
+
+    wiggle_to_bigwig_template = ('wigToBigWig {wiggle_dir}/{sample}.fwd.wig.gz {chrnamelength} {sample}.fwd.bw\n'
+    'wigToBigWig {wiggle_dir}/{sample}.rev.wig.gz {chrnamelength} {sample}.rev.bw')
+
+    wiggle_dir = WIGGLE_DIR
+
+    for sample, info in SAMPLES.items():
+        printp(wiggle_to_bigwig_template.format(**locals()))
+
+    printp("""# drmr:wait\n\n\n""")
+
+
+    # print the necessary files for the track hub...
+    with open(os.path.join(CONFIG_DIR, 'genomes.txt'), 'w') as f:
+        f.write('genome {}\n'.format(GENOME))
+        f.write("trackDb trackDb.txt\n")
+
+    with open(os.path.join(CONFIG_DIR, 'hub.txt'), 'w') as f:
+        f.write('hub\t{}\n'.format(HUB_NAME))
+        f.write('shortLabel\t{}\n'.format(HUB_SHORT_LABEL))
+        f.write('longLabel\t{}\n'.format(HUB_LONG_LABEL))
+        f.write('genomesFile\t{}\n'.format(GENOMES_FILE))
+        f.write('email\t{}\n'.format(EMAIL))
+
+    with open(os.path.join(CONFIG_DIR, 'trackDb.txt'), 'w') as f:
+        # hub info first
+        f.write("track\t{}\n".format(HUB_NAME))
+        f.write("shortLabel\t{}\n".format(HUB_SHORT_LABEL))
+        f.write("longLabel\t{}\n".format(HUB_LONG_LABEL))
+        f.write("superTrack\ton show\n")
+        f.write("priority\t{}\n".format(TRACK_PRIORITY))
+
+        for sample, info in sorted(SAMPLES.items()):
+            f.write("\n")
+            f.write("\ttrack\t{}\n".format(info['track_name']))
+            f.write("\tshortLabel\t{}\n".format(info['short_label']))
+            f.write("\tlongLabel\t{}\n".format(info['long_label']))
+            f.write("\tparent\t{}\n".format(HUB_NAME))
+            f.write("\tcontainer\t{}\n".format('multiWig'))
+            f.write("\tvisibility\t{}\n".format('full'))
+            f.write("\ttype\t{}\n".format('bigWig -50 50'))
+            f.write("\tmaxHeightPixels\t{}\n".format('100:100:16'))
+            f.write("\taggregate\t{}\n".format('transparentOverlay'))
+            TRACK_PRIORITY += 0.1
+            f.write("\tpriority\t{}\n".format(TRACK_PRIORITY))
+
+            for strand in ['fwd', 'rev']:
+                f.write("\n")
+                f.write("\t\ttrack\t{}_{}\n".format(info['track_name'], strand))
+                f.write("\t\ttype\t{}\n".format('bigWig'))
+                f.write("\t\tbigDataUrl\t{}.{}.bw\n".format(sample, strand))
+                f.write("\t\tparent\t{}\n".format(info['track_name']))
+                f.write("\t\tcolor\t{}\n".format(POSITIVE_STRAND_RGB))
+                if strand == 'rev':
+                    f.write("\t\taltColor\t{}\n".format(NEGATIVE_STRAND_RGB))
+
+
+    printp("""# drmr:wait\n\n\n""")
+    
+    # get the software versions
+    printp("""\n#\n# Print versions of the software used\n#""")
+    printp("""\n# drmr:label versions""")
+    printp("""\n# drmr:job time_limit=00:01:00 working_directory={} memory=1g processors=1""".format(VERSION_DIR))
+
+    printp("java -jar {} > qorts.version".format(QORTS_JAR))
+    printp("wigToBigWig > wigToBigWig.version")
+    printp("""# drmr:wait\n\n\n""")

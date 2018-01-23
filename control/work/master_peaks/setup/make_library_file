@@ -1,0 +1,76 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+
+from pprint import pprint
+import collections
+import os
+import sys
+import re
+
+csv_files = sys.argv[1:]
+
+ROOT = os.getenv('DANFORTH_HOME')
+
+# given the CSV files, print a data dictionary
+
+# dictionary format should be:
+# LIBRARIES = {
+#     'sample_1_unique_id': {
+#         'bam' : '...',
+#         'peaks' : '...',
+#     },
+#     'sample_2_unique_id' ....
+# }
+
+# unique id is: {seqcore_id}
+
+
+def csv_file_to_sequencing_run(f):
+    """Given the CSV file from the sequencing core, infer the sequencing run
+    """
+    return re.match('Run_(\d+).csv', os.path.basename(csv_file)).groups(0)[0]
+
+
+def bam_path(unique_id):
+    return os.path.join(ROOT, 'work', 'atacseq', 'results', 'prune', '{unique_id}.pruned.bam'.format(**locals()))
+
+
+def peak_path(unique_id):
+    return os.path.join(ROOT, 'work', 'atacseq', 'results', 'macs2', '{unique_id}_peaks.broadPeak.noblacklist'.format(**locals()))
+
+
+LIBRARIES = {}
+
+for csv_file in csv_files:
+
+    header_line = None
+    sequencing_run = csv_file_to_sequencing_run(csv_file)
+
+    with open(csv_file, 'r') as f:
+        for line in f:
+            line_l = line.rstrip().split(',')
+            if header_line is None:
+                if line_l[0] == 'Lane':
+                    header_line = line
+                    continue
+                else:
+                    continue
+
+            parsed_line = dict(zip(header_line.split(','), line_l))  # e.g. d['Lane'] --> 1, d['Sample_ID'] = 'Sample_90470' ...
+
+            seqcore_id = parsed_line['Sample_ID'].replace('Sample_', '')
+            unique_id = seqcore_id
+
+            if unique_id not in LIBRARIES:
+                sample_information = {
+                    'bam': bam_path(unique_id),
+                    'peaks': peak_path(unique_id)
+                }
+
+                LIBRARIES[unique_id] = sample_information
+
+
+# now print the dictionary
+LIBRARIES = collections.OrderedDict(sorted(LIBRARIES.items()))
+pprint(dict(LIBRARIES.items()), width=1)

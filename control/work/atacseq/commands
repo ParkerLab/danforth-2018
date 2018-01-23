@@ -1,0 +1,413 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+
+import collections
+import datetime
+import functools
+import os
+import math
+import re
+
+from john_utilities import symlink, mkdir
+from load_pprint_dict import load_pprint_dict
+from mappability_filter import filter_bed
+
+# Set paths here
+ROOT = os.getenv('DANFORTH_HOME')
+prefix_root = functools.partial(os.path.join, ROOT)
+prefix_data = functools.partial(os.path.join, ROOT, 'data')
+
+INCLUDE_X = False  # set to False if chromosome X should be excluded from the analysis, True if it should be included
+
+MACS2_GENOME_SIZE = {
+    'rn5': 'mm',
+    'mm9': 'mm',
+    'danforth': 'mm',
+    'hg19': 'hs'
+}
+
+WHITELIST = {}
+
+BLACKLIST = {
+    'mm9': [prefix_data('mappability', 'mm9-blacklist.bed.gz')],
+    'danforth': [prefix_data('mappability', 'danforth-blacklist.bed.gz')]
+}
+
+AUTOSOMAL_REFERENCES = {
+    'dm3': ['chr2L', 'chr2LHet', 'chr2R', 'chr2RHet', 'chr3L', 'chr3LHet', 'chr3R', 'chr3RHet', 'chr4'],
+    'dm6': ['chr2L', 'chr2R', 'chr3L', 'chr3R', 'chr4'],
+    'hg19': ['chr{}'.format(i) for i in range(1, 23)],
+    'mm9': ['chr{}'.format(i) for i in range(1, 20)],
+    'danforth': ['chr{}'.format(i) for i in range(1, 20)],
+    'mm10': ['chr{}'.format(i) for i in range(1, 20)],
+    'rn5': ['chr{}'.format(i) for i in range(1, 21)],
+}
+
+ORGANISMS = {
+    'rn5': 'rat',
+    'mm9': 'mouse',
+    'mm10': 'mouse',
+    'danforth': 'mouse',
+    'hg19': 'human'
+}
+
+ANALYSIS_PATH = prefix_root('work', 'atacseq')
+RESULTS_PATH = os.path.join(ANALYSIS_PATH, 'results')
+PIPELINE = os.path.join(ANALYSIS_PATH, 'pipeline')
+
+FASTQC_DIR = os.path.join(RESULTS_PATH, 'fastqc')
+TRIM_ADAPTER_DIR = os.path.join(RESULTS_PATH, 'trim_adapters')
+BWA_DIR = os.path.join(RESULTS_PATH, 'bwa')
+MERGE_DIR = os.path.join(RESULTS_PATH, 'merge')
+MD_DIR = os.path.join(RESULTS_PATH, 'mark_duplicates')
+PRUNE_DIR = os.path.join(RESULTS_PATH, 'prune')
+MACS2_DIR = os.path.join(RESULTS_PATH, 'macs2')
+ATAQV_DIR = os.path.join(RESULTS_PATH, 'ataqv')
+VERSION_DIR = os.path.join(RESULTS_PATH, 'version') # this directory will contain software version information for each of the packages used
+
+MACS2_PEAK_SHAPE = 'broad'
+
+# load the libraries file. This contains the relevant library/sample information
+LIBRARIES = load_pprint_dict('libraries') 
+
+
+#
+# The following are generic support functions. They shouldn't need
+# tweaking, but feel free.
+#
+
+def print_to_pipeline(pipeline_file, text=None, timed=False, ioniced=False):
+    """The primary function of all this: writing to a drmr script."""
+    if text:
+        if timed:
+            pipeline_file.write('/usr/bin/time -v ')
+        if ioniced:
+            pipeline_file.write('ionice -c2 -n7 ')
+        pipeline_file.write(text)
+        pipeline_file.write('\n')
+
+
+#
+#  End of generic, beginning of analysis-specific functions.
+#
+
+
+def make_read_group_file(library_name, readgroup, suffix=''):
+    return '{library_name}___{readgroup}{suffix}'.format(**locals())
+
+
+def get_chromosome_sizes_path(genome):
+    bwa_reference = BWA_REFERENCES[genome]
+    return '{}.chrom_sizes'.format(bwa_reference)
+
+
+def get_bwa_reference(genome):
+    return prefix_data('bwa', genome, '{}.fa'.format(genome))
+
+
+def get_tss(genome):
+    return prefix_data('tss', 'refseq', '{}.tss.refseq.bed'.format(genome))
+
+
+def get_macs2_genome_size(genome):
+    return MACS2_GENOME_SIZE[genome]
+
+
+def get_merged_bam_path(library_id):
+    return os.path.join(MERGE_DIR, '{}.bam'.format(library_id))
+
+
+def get_md_bam_path(library_id):
+    return os.path.join(MD_DIR, '{}.md.bam'.format(library_id))
+
+
+def get_pruned_bam_path(library_id):
+    return os.path.join(PRUNE_DIR, '{}.pruned.bam'.format(library_id))
+
+
+def get_whitelist(genome):
+    if genome in WHITELIST:
+        return WHITELIST[genome]
+    else:
+        return None
+
+
+def get_blacklist(genome):
+    if genome in BLACKLIST:
+        return BLACKLIST[genome]
+    else:
+        return None
+
+
+def get_genome(library_id):
+    return LIBRARIES[library_id]['genome']
+
+
+def get_readgroup_bams(library_id):
+    return [os.path.join(BWA_DIR, make_read_group_file(library_id, x, suffix='.bam')) for x in LIBRARIES[library_id]['readgroups']]
+
+
+def get_peak_path(library_id):
+    return os.path.join(MACS2_DIR, '{}_peaks.{}Peak'.format(library_id, MACS2_PEAK_SHAPE))
+
+
+def get_autosomes(genome):
+    return AUTOSOMAL_REFERENCES[genome]
+
+
+def get_organism(genome):
+    return ORGANISMS[genome]
+
+
+def mappability_filter(bed, genome):
+    whitelists = get_whitelist(genome)
+    if whitelists is None:
+        whitelists = []
+    blacklists = get_blacklist(genome)
+    if blacklists is None:
+        blacklists = []
+    return filter_bed(bed, whitelists=whitelists, blacklists=blacklists)
+
+
+def get_trimmed_fastq(fastq):
+    return os.path.join(TRIM_ADAPTER_DIR, os.path.basename(fastq).replace('fastq.gz', 'trimmed.fq.gz'))
+
+#
+# End of analysis-specific functions.
+#
+
+
+def fastqc():
+    """Run FastQC on all input libraries."""
+
+    mkdir(FASTQC_DIR)
+
+    printp("""\n#\n# run FastQC on initial data\n#""")
+    printp("""\n# drmr:label fastqc""")
+    printp("""\n# drmr:job time_limit=2h working_directory={}""".format(FASTQC_DIR))
+
+    for library, info in LIBRARIES.items():
+        for rg, files in info['readgroups'].items():
+            for fastq in files:
+                printp("""fastqc -o {} {}""".format(FASTQC_DIR, fastq))
+
+    printp("""\n# drmr:wait""")
+
+
+def trim_adapters():
+    #
+    # Trim adapter sequence from the FASTQ files
+    #
+
+    mkdir(TRIM_ADAPTER_DIR)
+
+    printp("""\n#\n# trim adapter sequence from reads\n#""")
+    printp("""\n# drmr:label trim-adapters""")
+    printp("""\n# drmr:job time_limit=4h working_directory={}""".format(TRIM_ADAPTER_DIR))
+
+    for name, library in LIBRARIES.items():
+        for rg, files in library['readgroups'].items():
+            trimmed = [get_trimmed_fastq(f) for f in files]
+            printp("""cta {} {} {} {}""".format(*(files + trimmed)))
+
+    printp("""\n# drmr:wait""")
+
+
+def bwa(threads=1, time_limit='8h'):
+    """
+    Aligns reads to the reference genome with BWA.
+    """
+
+    mkdir(BWA_DIR)
+
+    printp("""\n#\n# align reads to the reference genome using BWA\n#""")
+    printp("""# drmr:label bwa\n""")
+    printp("""# drmr:job nodes=1 processors={} working_directory={} memory=12g time_limit={}""".format(threads, BWA_DIR, time_limit))
+
+    for library_name, library in LIBRARIES.items():
+        for rg, fastq_files in library['readgroups'].items():
+            bwa_reference = get_bwa_reference(get_genome(library_name))
+            bwa_input_files = ' '.join([get_trimmed_fastq(f) for f in fastq_files])
+            bam = make_read_group_file(library_name, rg, '.bam')
+            printp("""bwa mem -M -t {threads} {bwa_reference} {bwa_input_files} | samtools sort -m 1g -@ {threads} -O bam -T {library_name}___{rg}.sort -o {bam} -""".format(**locals()), timed=True, ioniced=True)
+
+    printp("""\n# drmr:wait""")
+
+
+def merge():
+    mkdir(MERGE_DIR)
+
+    printp("""\n#\n# merge technical replicates\n#""")
+    printp("""# drmr:label merge\n""")
+    printp("""\n# drmr:job nodes=1 processors=1 memory=10g working_directory={} time_limit=8h""".format(MERGE_DIR))
+
+    template = """ionice -c2 -n7 samtools merge {0}.bam {1}; ionice -c2 -n7 samtools sort -m 5G -O bam -T {0}.sort -o {0}.sorted.bam {0}.bam; mv {0}.sorted.bam {0}.bam; samtools index {0}.bam"""
+
+    for library_name in LIBRARIES:
+        readgroups = " ".join(get_readgroup_bams(library_name))
+        printp(template.format(library_name, readgroups))
+
+    printp("""\n# drmr:wait""")
+
+
+def mark_duplicates():
+    """
+    Mark duplicates in each library BAM file.
+    """
+
+    mkdir(MD_DIR)
+
+    printp("""# drmr:label mark-duplicates\n""")
+    printp("""# drmr:job nodes=1 processors=2 memory=8g working_directory={} time_limit=8h""".format(MD_DIR))
+
+    for library_id in LIBRARIES:
+        input_bam = get_merged_bam_path(library_id)
+        output_bam = get_md_bam_path(library_id)
+        printp("""picard -m 4g MarkDuplicates I={input_bam} O={output_bam} ASSUME_SORTED=true METRICS_FILE={library_id}.markdup.metrics VALIDATION_STRINGENCY=LENIENT TMP_DIR=.; samtools index {output_bam}""".format(**locals()))
+
+    printp("""\n# drmr:wait""")
+
+
+def prune(mapq=30):
+    """
+    Prune the BAM files down to properly paired and uniquely mapped
+    autosomal alignments with good quality, and remove all duplicates
+    """
+
+    mkdir(PRUNE_DIR)
+
+    printp("""\n#\n# prune the BAM files with marked duplicates down to properly paired""")
+    printp("""# and mapped primary autosomal alignments of good quality, for peak calling\n#\n""")
+    printp("""\n# drmr:label prune\n""")
+    printp("""# drmr:job nodes=1 processors=1 memory=4g time_limit=4h working_directory={}""".format(PRUNE_DIR))
+
+    #
+    # samtools filters:
+    #   -f 3: keep properly paired and mapped reads
+    #   -F 4: filter out unmapped reads
+    #   -F 8: filter out unmapped mates
+    #   -F 256: filter out secondary reads
+    #   -F 1024: filter out duplicates marked by Picard above
+    #   -F 2048: filter out supplementary reads
+    #
+
+    template = """samtools view -b -h -f 3 -F 4 -F 8 -F 256 -F 1024 -F 2048 -q {mapq} {input_bam} {chromosomes} > {output_bam}; samtools index {output_bam}"""
+
+    for library_id in LIBRARIES:
+        autosomes = ' '.join(AUTOSOMAL_REFERENCES[get_genome(library_id)])
+        chromosomes = autosomes + ' chrX' if INCLUDE_X else autosomes
+        input_bam = get_md_bam_path(library_id)
+        output_bam = get_pruned_bam_path(library_id)
+        printp(template.format(**locals()), timed=True, ioniced=True)
+
+    printp("""\n# drmr:wait""")
+
+
+def macs2(peak_shape='broad'):
+    """
+    Call peaks using MACS2
+    """
+
+    mkdir(MACS2_DIR)
+    
+    printp("""\n#\n# peak calling using MACS\n#""")
+    printp("""# drmr:label macs2\n""")
+    printp("""\n# drmr:job nodes=1 processors=1 memory=8g working_directory={} time_limit=4h""".format(MACS2_DIR))
+
+    for library_id in LIBRARIES:
+        pruned_bam = get_pruned_bam_path(library_id)
+        genome_size = get_macs2_genome_size(get_genome(library_id))
+
+        if peak_shape == 'narrow':
+            printp("""ionice -c2 -n7 macs2 callpeak -t {pruned_bam} -f BAM -n {library_id} -g {genome_size} --nomodel --shift -37 --seed 762873 --extsize 73 -B --keep-dup all &> {library_id}.macs2.out""".format(**locals()))
+        else:
+            printp("""ionice -c2 -n7 macs2 callpeak -t {pruned_bam} -f BAM -n {library_id} -g {genome_size} --nomodel --shift -100 --seed 762873 --extsize 200 -B --broad --keep-dup all &> {library_id}.macs2.out""".format(**locals()))
+
+    printp("""\n# drmr:wait""")
+
+
+    printp("""\n# drmr:label mappability-filter\n""")
+    printp("""\n# drmr:job nodes=1 processors=1 memory=4g working_directory={} time_limit=4h""".format(MACS2_DIR))
+
+    template = '{mf} > {out}'
+
+    for library_id in LIBRARIES:
+        mf = mappability_filter(get_peak_path(library_id), get_genome(library_id))
+        out = '{}.noblacklist'.format(get_peak_path(library_id))
+        printp(template.format(**locals()))
+
+    printp("""\n# drmr:wait""")
+
+
+def ataqv():
+    """Run ataqv on each bam (containing marked duplicates)"""
+
+    mkdir(ATAQV_DIR)
+    
+    printp("""\n#\n# Run ataqv\n#""")
+    printp("""\n# drmr:label ataqv""")
+    printp("""\n# drmr:job time_limit=1h working_directory={} processors=1""".format(ATAQV_DIR))
+
+    template = """ataqv --peak-file {peak_file}{excluded_region_option} --name {name} --metrics-file {library_id}.ataqv.json.gz --tss-file {tss_file} --ignore-read-groups {organism} {md_bam} > {library_id}.ataqv.out"""
+
+    for library_id in LIBRARIES:
+        name = library_id
+        tss_file = get_tss(get_genome(library_id))
+        peak_file = get_peak_path(library_id)
+        organism = get_organism(get_genome(library_id))
+        md_bam = get_md_bam_path(library_id)
+        excluded_regions = get_blacklist(get_genome(library_id))
+        excluded_region_option = ""
+        if excluded_regions is not None:
+            excluded_region_option = ' ' + ' '.join(['--excluded-region-file {}'.format(x) for x in excluded_regions])
+
+        printp(template.format(**locals()))
+
+    printp("""\n# drmr:wait""")
+
+
+def versions():
+    """Print the versions of the software used"""
+    
+    mkdir(VERSION_DIR)
+
+    printp("""\n#\n# Print versions of the software used\n#""")
+    printp("""\n# drmr:label versions""")
+    printp("""\n# drmr:job time_limit=00:01:00 working_directory={} memory=1g processors=1""".format(VERSION_DIR))
+
+    printp("fastqc --version &> fastqc.version")
+    printp("cta --version &> cta.version")
+    printp("bwa &> bwa.version")
+    printp("picard MarkDuplicates -h &> picard.version")
+    printp("samtools --version &> samtools.version")
+    printp("macs2 --version &> macs2.version")
+    printp("bedtools --version &> bedtools.version")
+    printp("ataqv --version &> ataqv.version")
+
+
+    printp("""\n# drmr:wait""")
+
+
+if __name__ == '__main__':
+
+    mkdir(RESULTS_PATH)
+
+    if os.path.exists(PIPELINE):
+        os.unlink(PIPELINE)
+
+    PIPELINE_FILE = open(PIPELINE, 'w')
+    printp = functools.partial(print_to_pipeline, PIPELINE_FILE)
+
+    printp("""#!bash""")
+    printp("""# -*- mode: sh; coding: utf-8 -*-\n""")
+
+    fastqc()
+    trim_adapters()
+    bwa()
+    merge()
+    mark_duplicates()
+    prune()
+    macs2(MACS2_PEAK_SHAPE)
+    ataqv()
+    versions()

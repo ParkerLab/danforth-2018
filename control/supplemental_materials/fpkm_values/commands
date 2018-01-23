@@ -1,0 +1,5 @@
+ANALYSIS_PATH="${DANFORTH_HOME}/supplemental_materials/fpkm_values"
+
+mkdir -p $ANALYSIS_PATH && cd $ANALYSIS_PATH
+Rscript ${DANFORTH_HOME}/src/fpkm_values_all_samples.R 
+cd -

@@ -1,0 +1,10 @@
+ROOT=${DANFORTH_HOME}
+SCRIPT="${ROOT}/src/kegg_volcano_plot.R"
+
+OUT_DIR="${ROOT}/figures/kegg_volcano_plot"
+BASENAME="kegg_volcano.png"
+GO="${ROOT}/work/go/results/danforth.rnaenrich_results.KEGG.txt"
+ENTREZ_TO_ENSEMBL="${ROOT}/data/entrez_to_ensembl/entrez2ensembl.gz"
+
+mkdir -p $OUT_DIR
+Rscript ${SCRIPT} $GO $ENTREZ_TO_ENSEMBL ${OUT_DIR}/${BASENAME}

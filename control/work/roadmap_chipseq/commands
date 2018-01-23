@@ -1,0 +1,367 @@
+#!/usr/bin/env python
+
+#
+# This commands template needs customization wherever you see CHANGES
+# REQUIRED. Where you see CHANGES RECOMMENDED, check that section to
+# make sure it works for your pipeline.
+#
+
+from __future__ import print_function
+
+import contextlib
+import functools
+import itertools
+import os
+import re
+
+from john_utilities import mkdir, symlink
+from load_pprint_dict import load_pprint_dict
+
+ROOT = os.getenv('DANFORTH_HOME')
+prefix_data = functools.partial(os.path.join, ROOT, 'data')
+
+ANALYSIS_PATH = os.path.join(ROOT, 'work', 'roadmap_chipseq')
+DATA_PATH = os.path.join(ANALYSIS_PATH, 'data')
+WORK_PATH = os.path.join(ANALYSIS_PATH, 'results')
+PIPELINE = os.path.join(ANALYSIS_PATH, 'pipeline')
+
+FASTQ_DIR = os.path.join(DATA_PATH, 'fastq')
+
+FASTQC_DIR = os.path.join(WORK_PATH, 'fastqc')
+READ_LENGTH_TRIMMED_FASTQ_DIR = os.path.join(WORK_PATH, 'read_length_trimmed_fastq')
+BWA_DIR = os.path.join(WORK_PATH, 'bwa')
+MACS2_DIR = os.path.join(WORK_PATH, 'macs2')
+MD_DIR = os.path.join(WORK_PATH, 'mark_duplicates')
+PRUNE_DIR = os.path.join(WORK_PATH, 'prune')
+CROSS_CORRELATION_DIR = os.path.join(WORK_PATH, 'chipseq_qc')
+
+AUTOSOMAL_REFERENCES = {
+    'hg19': ['chr{}'.format(i) for i in range(1, 23)],
+    'mm9': ['chr{}'.format(i) for i in range(1, 20)],
+    'danforth': ['chr{}'.format(i) for i in range(1, 20)],
+    'rn5': ['chr{}'.format(i) for i in range(1, 21)],
+}
+
+EXCLUDED_REGIONS = {
+    'hg19': [prefix_data('mappability', x) for x in ['wgEncodeDukeMapabilityRegionsExcludable.bed.gz', 'wgEncodeDacMapabilityConsensusExcludable.bed.gz']],
+    'mm9': [prefix_data('mappability', 'mm9-blacklist.bed.gz')]
+}
+
+MACS2_GENOME_SIZES = {
+    'hg19': 'hs',
+    'mm9': 'mm',
+    'danforth': 'mm',
+    'rn5': 'mm'
+}
+
+ORGANISMS = {
+    'hg19': 'human',
+    'mm9': 'mouse',
+    'danforth': 'mouse',
+    'rn5': 'rat'
+}
+
+#
+# load in the sample information
+#
+
+DATA = load_pprint_dict('libraries')
+
+#
+# helper functions
+#
+
+def get_genome(sample):
+    return DATA[sample]['genome']
+
+
+def get_bwa_reference(genome):
+    return os.path.join(ROOT, 'data', 'bwa', genome, '{}.fa'.format(genome))
+
+
+def get_fastq(srr):
+    return os.path.join(FASTQ_DIR, srr + '_1.fastq.gz')
+
+
+def get_read_length_trimmed_fastq(srr):
+    return os.path.join(READ_LENGTH_TRIMMED_FASTQ_DIR, srr + '_1.read_length_trimmed.fastq.gz')
+
+
+def get_srr(library):
+    return DATA[library]['SRR']
+
+
+def get_input_control_srr(library):
+    return DATA[library]['input_control']['SRR']
+
+
+def get_bwa_bam(library, control = False):
+    bam = '{}.bam'.format(get_srr(library) if not control else get_input_control_srr(library))
+    bam = os.path.join(BWA_DIR, bam)
+    return bam
+
+
+def get_md_bam(library, control = False):
+    bam = '{}.md.bam'.format(get_srr(library) if not control else get_input_control_srr(library))
+    bam = os.path.join(MD_DIR, bam)
+    return bam
+
+
+def get_pruned_bam(library, control = False):
+    bam = '{}.pruned.bam'.format(get_srr(library) if not control else get_input_control_srr(library))
+    bam = os.path.join(PRUNE_DIR, bam)
+    return bam
+
+
+def print_to_pipeline(pipeline_file, text=None, timed=False, ioniced=False):
+    """The primary function of all this: writing to a drmr script."""
+    if text:
+        if timed:
+            pipeline_file.write('/usr/bin/time -v ')
+        if ioniced:
+            pipeline_file.write('ionice -c3 ')
+        pipeline_file.write(text)
+        pipeline_file.write('\n')
+
+#
+# Primary analysis functions
+#
+
+def download_fastq():
+    """ Download all the fastq files"""
+
+    mkdir(FASTQ_DIR)
+
+    template = """fastq-dump --split-files --gzip {}"""
+
+    printp("""\n#\n# download all the fastq files\n#""")
+    printp("""\n# drmr:label fastq-download""")
+    printp("""\n# drmr:job time_limit=2h working_directory={}""".format(FASTQ_DIR))
+
+    for library, info in DATA.items():
+        printp(template.format(get_srr(library)))
+        printp(template.format(get_input_control_srr(library)))
+
+    printp("""\n# drmr:wait""")
+
+
+def fastqc():
+    """Run FastQC on all input libraries."""
+
+    mkdir(FASTQC_DIR)
+
+    printp("""\n#\n# run FastQC on initial data\n#""")
+    printp("""\n# drmr:label fastqc""")
+    printp("""\n# drmr:job time_limit=2h working_directory={}""".format(FASTQC_DIR))
+
+    for sample, info in DATA.items():
+        for x in ['treatment', 'control']:
+            fastq = get_fastq(get_srr(sample)) if x == 'treatment' else get_fastq(get_input_control_srr(sample))
+            symlink(fastq, FASTQC_DIR)
+            printp("""fastqc {}""".format(os.path.basename(fastq)), timed=True, ioniced=True)
+
+    printp("""\n# drmr:wait""")
+
+
+def trim_fastq_files_to_length(desired_read_length = 36):
+    """Trim all fastq files so that the read length is 36."""
+
+    mkdir(READ_LENGTH_TRIMMED_FASTQ_DIR)
+
+    template = """zcat {input_fastq} | fastx_trimmer -l {desired_read_length} -z -o {output_fastq}"""
+
+    printp("""\n#\n# trim reads to a certain length\n#""")
+    printp("""\n# drmr:label read-length-trimming""")
+    printp("""\n# drmr:job time_limit=2h working_directory={}""".format(READ_LENGTH_TRIMMED_FASTQ_DIR))
+
+    for sample, info in DATA.items():
+        for x in ['treatment', 'control']:
+            input_fastq = get_fastq(get_srr(sample)) if x == 'treatment' else get_fastq(get_input_control_srr(sample))
+            output_fastq = get_read_length_trimmed_fastq(get_srr(sample)) if x == 'treatment' else get_read_length_trimmed_fastq(get_input_control_srr(sample))
+            printp(template.format(**locals()))
+
+    printp("""\n# drmr:wait""")
+
+
+def bwa(threads=4, algorithm='MEM', time_limit='8h'):
+    """
+    Aligns reads to the reference genome with BWA.
+
+    The BWA algorithm can be specified as 'MEM', 'backtrack', or
+    'auto', to choose the algorithm based on the library read size.
+    """
+
+    mkdir(BWA_DIR)
+
+    printp("""# drmr:label bwa\n""")
+    printp("""# drmr:job nodes=1 processors={} working_directory={} time_limit={}""".format(threads, BWA_DIR, time_limit))
+
+
+    if algorithm == 'MEM':
+        for sample, info in DATA.items():
+            for x in ['treatment', 'control']:
+                srr = get_srr(sample) if x == 'treatment' else get_input_control_srr(sample)
+                fastq = get_read_length_trimmed_fastq(srr)
+                bwa_reference = get_bwa_reference(get_genome(sample))
+                bam = get_bwa_bam(sample, control = False) if x == 'treatment' else get_bwa_bam(sample, control = True)
+                printp("""bwa mem -M -t {threads} {bwa_reference} {fastq} | samtools sort -m 1g -@ {threads} -O bam -T {srr}.sort -o {bam} -""".format(**locals()), timed=True, ioniced=True)
+
+        printp("""\n# drmr:wait""")
+
+    elif algorithm == 'ALN':
+        for sample, info in DATA.items():
+            for x in ['treatment', 'control']:
+                srr = get_srr(sample) if x == 'treatment' else get_input_control_srr(sample)
+                fastq = get_read_length_trimmed_fastq(srr)
+                bwa_reference = get_bwa_reference(get_genome(sample))
+                bam = get_bwa_bam(sample, control = False) if x == 'treatment' else get_bwa_bam(sample, control = True)
+                printp("""bwa aln -t {threads} -f {srr}.sai {bwa_reference} {fastq}""".format(**locals()), timed=True, ioniced=True)
+
+        printp("""\n# drmr:wait""")
+        printp("""\n#\n# Create the BAM files.\n#\n""")
+        printp("""# drmr:label bwa-bam\n""")
+        printp("""# drmr:job nodes=1 processors={} working_directory={} time_limit={}""".format(threads, BWA_DIR, time_limit))
+        bwa_command = 'samse'
+
+        for sample, info in DATA.items():
+            for x in ['treatment', 'control']:
+                srr = get_srr(sample) if x == 'treatment' else get_input_control_srr(sample)
+                fastq = get_read_length_trimmed_fastq(srr)
+                bwa_reference = get_bwa_reference(get_genome(sample))
+                bam = get_bwa_bam(sample, control = False) if x == 'treatment' else get_bwa_bam(sample, control = True)
+                printp("""bwa {bwa_command} {bwa_reference} {srr}.sai {fastq} | samtools sort -m 1g -@ {threads} -O bam -T {srr}.sort -o {bam} -""".format(**locals()), timed=True, ioniced=True)
+
+        printp("""\n# drmr:wait""")
+
+
+def mark_duplicates():
+    """
+    Mark duplicates in each library BAM file.
+    """
+
+    mkdir(MD_DIR)
+
+    printp("""# drmr:label mark-duplicates\n""")
+    printp("""# drmr:job nodes=1 processors=1 memory=12g working_directory={} time_limit=8h""".format(MD_DIR))
+
+    for sample, info in DATA.items():
+        for x in ['treatment', 'control']:
+            srr = get_srr(sample) if x == 'treatment' else get_input_control_srr(sample)
+            input_bam = get_bwa_bam(sample, control=False) if x == 'treatment' else get_bwa_bam(sample, control=True)
+            output_bam = get_md_bam(sample, control=False) if x == 'treatment' else get_md_bam(sample, control=True)
+            printp("""picard -m 8g MarkDuplicates I={input_bam} O={output_bam} ASSUME_SORTED=true METRICS_FILE={srr}.markdup.metrics VALIDATION_STRINGENCY=LENIENT TMP_DIR=.; samtools index {output_bam}""".format(**locals()), timed=True)
+
+    printp("""\n# drmr:wait""")
+
+
+def prune(mapq=30):
+    """
+    Prune the BAM files down to properly paired and uniquely mapped
+    autosomal alignments with good quality, and remove all duplicates
+    """
+
+    mkdir(PRUNE_DIR)
+
+    #
+    # samtools filters:
+    #   -f 3: keep properly paired and mapped reads
+    #   -F 4: filter out unmapped reads
+    #   -F 8: filter out unmapped mates
+    #   -F 256: filter out secondary reads
+    #   -F 1024: filter out duplicates marked by Picard above
+    #   -F 2048: filter out supplementary reads
+    #
+
+    template = """samtools view -b -h -F 4 -F 256 -F 1024 -F 2048 -q {mapq} {input_bam} {autosomes} > {output_bam}; samtools index {output_bam}"""
+
+    printp("""\n# drmr:label prune\n""")
+    printp("""# drmr:job nodes=1 processors=1 memory=4g time_limit=4h working_directory={}""".format(PRUNE_DIR))
+    printp("""\n#\n# prune the BAM files with marked duplicates down to properly paired""")
+    printp("""# and mapped primary autosomal alignments of good quality, for peak calling\n#\n""")
+
+    for sample, info in DATA.items():
+        for x in ['treatment', 'control']:
+            input_bam = get_md_bam(sample, control = False) if x == 'treatment' else get_md_bam(sample, control = True)
+            output_bam = get_pruned_bam(sample, control = False) if x == 'treatment' else get_pruned_bam(sample, control = True)
+            autosomes = ' '.join(AUTOSOMAL_REFERENCES[get_genome(sample)])
+            printp(template.format(**locals()), timed=True)
+
+    printp("""\n# drmr:wait""")
+
+
+def macs2(shift=-100, extsize=200, exclude_blacklisted_regions=False):
+    """
+    Call peaks with MACS2.
+    """
+
+    mkdir(MACS2_DIR)
+
+    printp("""\n#\n# peak calling\n#""")
+    printp("""# drmr:label macs2\n""")
+    printp("""\n# drmr:job nodes=1 processors=1 memory=8g working_directory={} time_limit=4h""".format(MACS2_DIR))
+
+    MACS2_BROAD_PEAK_TEMPLATE = """macs2 callpeak -t {input_bam} -c {chipseq_input} -f BAM -n {sample}.broad -g {macs2_genome_size} --nomodel --seed 2768427 -B --broad --keep-dup all &> {sample}.macs2.out"""
+
+    for sample, info in DATA.items():
+        input_bam = get_pruned_bam(sample, control = False)
+        chipseq_input = get_pruned_bam(sample, control = True)
+        macs2_genome_size = MACS2_GENOME_SIZES[get_genome(sample)]
+        printp(MACS2_BROAD_PEAK_TEMPLATE.format(**locals()), timed=True, ioniced=True)
+
+    printp("""\n# drmr:wait""")
+
+    if exclude_blacklisted_regions:
+        for sample, info in DATA.items():
+            exclude_commands = ' | '.join(['intersectBed -a stdin -b {} -v'.format(erf) for erf in EXCLUDED_REGIONS[get_genome(sample)]])
+            printp("""cat {sample}.broad_peaks.broadPeak | {exclude_commands} > {sample}.broad_peaks.broadPeak.noblacklist""".format(**locals()))
+
+        printp("""\n# drmr:wait""")
+
+    printp("""\n# drmr:wait""")
+
+
+
+
+def chipseq_cross_correlation():
+    """Use phantompeakqualtools to check the cross correlation as QC"""
+
+    mkdir(CROSS_CORRELATION_DIR)
+    
+    template = """Rscript {run_spp} -c={input_bam} -savp={srr}.pdf -out={srr}.txt"""
+
+    printp("""\n#\n# ChIP-seq QC\n#\n""")
+    printp("""# drmr:label cross-correlation\n""")
+    printp("""\n# drmr:job nodes=1 processors=1 memory=15g working_directory={} time_limit=4h""".format(CROSS_CORRELATION_DIR))
+
+    run_spp = os.getenv("RUN_SPP_PATH")
+
+    for sample, info in DATA.items():
+        for x in ['treatment', 'control']:
+            input_bam = get_pruned_bam(sample, control = False) if x == 'treatment' else get_pruned_bam(sample, control = True)
+            srr = get_srr(sample) if x == 'treatment' else get_input_control_srr(sample)
+            printp(template.format(**locals()))
+
+    printp("""\n# drmr:wait""")
+
+
+if __name__ == '__main__':
+    mkdir(WORK_PATH)
+    mkdir(DATA_PATH)
+
+    if os.path.exists(PIPELINE):
+        os.unlink(PIPELINE)
+
+    PIPELINE_FILE = open(PIPELINE, 'w')
+    printp = functools.partial(print_to_pipeline, PIPELINE_FILE)
+
+    printp('#!/bin/bash')
+    printp('# -*- mode: sh; coding: utf-8 -*-\n')
+
+    download_fastq()
+    fastqc()
+    trim_fastq_files_to_length()
+    bwa(algorithm = "ALN")
+    mark_duplicates()
+    prune()
+    macs2(exclude_blacklisted_regions=True)
+    chipseq_cross_correlation()

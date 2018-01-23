@@ -1,0 +1,7 @@
+ROOT="/lab/work/porchard/danforth-2017.internal"
+ANALYSIS_PATH="${ROOT}/supplemental_materials/de_genes"
+
+mkdir -p $ANALYSIS_PATH && cd $ANALYSIS_PATH
+
+Rscript ${ROOT}/src/table_of_de_genes.R
+cd -

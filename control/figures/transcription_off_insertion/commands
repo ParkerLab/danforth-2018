@@ -1,0 +1,22 @@
+ROOT="${DANFORTH_HOME}"
+ANALYSIS_DIR="${ROOT}/figures/transcription_off_insertion"
+
+mkdir -p $ANALYSIS_DIR && cd $ANALYSIS_DIR
+
+# create the bed file
+rm -rf bps.bed
+for i in {19354026..19364026}
+do
+	printf "chr2\t$i\t$(($i+1))\n" >> bps.bed
+done
+
+# Get the signal
+for i in `ls ${ROOT}/work/gb/rnaseq/results/bigwig/*`
+do
+	bn=$(basename $i | perl -pe 's/\.bw$//')
+	measure_features -n 0.0 -s mean ${i} bps.bed > ${bn}.signal.bed
+done
+
+
+# make the barplot
+Rscript ${ROOT}/src/transcription_off_insertion.R ${ANALYSIS_DIR}

@@ -1,0 +1,10 @@
+ROOT=${DANFORTH_HOME}
+SCRIPT="${ROOT}/src/rnaseq_heatmap.R"
+
+OUT_DIR="${ROOT}/figures/rnaseq_heatmap"
+BASENAME="rnaseq_heatmap.png"
+RNASEQ="${ROOT}/work/differential_gene_expression/results/deseq2/differential_gene_expression.deseq2_results.txt"
+RNASEQ_COUNTS_DIR="${ROOT}/work/differential_gene_expression/results/counts"
+
+mkdir -p $OUT_DIR
+Rscript ${SCRIPT} $RNASEQ $RNASEQ_COUNTS_DIR ${OUT_DIR}/${BASENAME}

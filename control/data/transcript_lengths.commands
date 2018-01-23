@@ -1,0 +1,3 @@
+mkdir -p transcript_lengths && cd transcript_lengths
+mysql --host=genome-mysql.cse.ucsc.edu --user=genome -N -D mm9 -e "SELECT name2, ensGene.name, value, exonStarts, exonEnds FROM ensGene JOIN ensemblToGeneName WHERE ensGene.name = ensemblToGeneName.name" | perl -ne 'chomp; my @line = split /\t/, $_; my @starts = split /,/, $line[3]; my @ends = split /,/, $line[4]; my $sum_length = 0;  map { $sum_length += ($ends[$_] - $starts[$_]) } (0..(scalar @starts)); print("$line[0]\t$line[1]\t$line[2]\t$sum_length\n")' > mm9.transcript_lengths
+cd ..

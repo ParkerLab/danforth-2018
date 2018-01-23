@@ -1,0 +1,293 @@
+#!/usr/bin/env python
+
+#
+# This commands template needs customization wherever you see CHANGES
+# REQUIRED. Where you see CHANGES RECOMMENDED, check that section to
+# make sure it works for your pipeline.
+#
+
+from __future__ import print_function
+
+import functools
+import itertools
+import os
+import re
+
+from john_utilities import mkdir
+from load_pprint_dict import load_pprint_dict
+
+ROOT = os.getenv('DANFORTH_HOME')
+prefix_data = functools.partial(os.path.join, ROOT, 'data')
+SRC = os.path.join(ROOT, 'src')
+
+QORTS_JAR = os.getenv('QORTS_JAR')
+QORTS_GEN_MULTI_QC = os.getenv('QORTS_GEN_MULTI_QC')
+
+ANALYSIS_NAME = "KK1625"
+ANALYSIS_PATH = os.path.join(ROOT, 'work', 'rnaseq')
+WORK_PATH = os.path.join(ANALYSIS_PATH, 'results')
+PIPELINE = os.path.join(ANALYSIS_PATH, 'pipeline')
+
+STAR_INDEX_DIR = os.path.join(WORK_PATH, 'star_index')
+FASTQC_DIR = os.path.join(WORK_PATH, 'fastqc')
+STAR_DIR = os.path.join(WORK_PATH, 'star')
+QORTS_DIR = os.path.join(WORK_PATH, 'qorts')
+SIZE_FACTORS_DIR = os.path.join(WORK_PATH, 'size_factors')
+VERSION_DIR = os.path.join(WORK_PATH, 'versions')
+
+GTFS = {
+    'mm9': prefix_data('gtf', 'mm9', 'mm9.gtf'),
+    'danforth': prefix_data('gtf', 'danforth', 'danforth.insertion.gtf')
+}
+
+INCLUDE_X = False  # set to False to filter out the X chromosome, True to include the X chromosome 
+
+#
+# Library dictionary
+#
+
+DATA = load_pprint_dict('libraries')
+
+
+def print_to_pipeline(pipeline_file, text=None, timed=False, ioniced=False):
+    """The primary function of all this: writing to a drmr script."""
+    if text:
+        if timed:
+            pipeline_file.write('/usr/bin/time -v ')
+        if ioniced:
+            pipeline_file.write('ionice -c 2 -n 7 ')
+        pipeline_file.write(text)
+        pipeline_file.write('\n')
+
+
+def get_fasta(genome):
+    return os.path.join(ROOT, 'data', 'fasta', '{}'.format(genome), '{}.fa'.format(genome))
+
+
+def get_gtf(genome):
+    return GTFS[genome]
+
+
+def get_autosomes(genome):
+    if genome == 'mm9' or genome == 'danforth':
+        return ['chr' + str(x) for x in range(1, 20)]
+    else:
+        sys.stderr.write('Do not know the autosomes for genome {}'.format(genome))
+        sys.exit()
+
+
+def get_star_index(genome):
+    return os.path.join(STAR_INDEX_DIR, genome)
+
+
+def get_star_dir(library_name):
+    return os.path.join(STAR_DIR, library_name)
+
+
+def make_star_index(threads=4):
+    """Make the index for STAR"""
+
+    mkdir(STAR_INDEX_DIR)
+
+    printp("""\n#\n# make the index for STAR\n#""")
+    printp("""\n# drmr:label star-index""")
+    printp("""\n# drmr:job memory=50g processors={} time_limit=4h working_directory={}""".format(threads, STAR_INDEX_DIR))
+
+    genomes = set()
+    for library, info in DATA.items():
+        genomes.add(info['genome'])
+
+    template = """STAR --runMode genomeGenerate --runThreadN {threads} --genomeDir {genome_dir} --genomeFastaFiles {fasta} --sjdbGTFfile {gtf}"""
+
+    for genome in genomes:
+        genome_dir = get_star_index(genome)
+        mkdir(genome_dir)
+        fasta = get_fasta(genome)
+        gtf = get_gtf(genome)
+        printp(template.format(**locals()))
+
+    printp("""\n# drmr:wait""")
+
+
+def fastqc():
+    """Run FastQC on all input libraries."""
+
+    mkdir(FASTQC_DIR)
+
+    printp("""\n#\n# run FastQC on initial data\n#""")
+    printp("""\n# drmr:label fastqc""")
+    printp("""\n# drmr:job time_limit=2h working_directory={}""".format(FASTQC_DIR))
+
+    for library, info in DATA.items():
+        for readgroup, fastqs in info['readgroups'].items():
+            for fastq in fastqs:
+                printp("""fastqc -o {} {}""".format(FASTQC_DIR, fastq), timed=True, ioniced=True)
+
+    printp("""\n# drmr:wait""")
+
+
+def star(command_template=None, threads=1, seed=789727, memory=32):
+    if command_template is None:
+        command_template = """STAR --runThreadN {} --runRNGseed {} --readFilesCommand gunzip -c --genomeDir {} --outSAMtype BAM SortedByCoordinate --outSAMunmapped Within KeepPairs --sjdbGTFfile {} --readFilesIn {}"""
+
+    printp('\n# drmr:label star')
+
+    for library_name, library in DATA.items():
+        fastq_files = library['readgroups'].values()[0]  # NOTE: this only works if there is only one readgroup per library, which in this case there is
+        genome = library['genome']
+        star_reference = get_star_index(genome)
+        gtf = get_gtf(genome)
+        star_dir = get_star_dir(library_name)
+        mkdir(star_dir)
+
+        printp('\n# drmr:job time_limit=4h processors={} memory={}g working_directory={}'.format(threads, memory, star_dir))
+        printp(command_template.format(threads, seed, star_reference, gtf, ' '.join(fastq_files)), ioniced = True)
+
+    printp("""\n# drmr:wait""")
+
+
+def qorts(command_template=None, threads=4, memory_slurm=50, memory_java = 25):
+    if command_template is None:
+        qorts_command_template = """java -Xmx{}g -jar {} QC {} --generatePlots --title {} --chromSizes {} {} {} {}"""
+
+    printp('\n# drmr:label qorts')
+
+    # run QoRTs on each library's BAM
+    for library_name, library in sorted(DATA.items()):
+        genome = library['genome']
+        star_reference = get_star_index(genome)
+        chrom_sizes = os.path.join(star_reference, 'chrNameLength.txt')
+        gtf = get_gtf(genome)
+        star_dir = get_star_dir(library_name)
+        bam = os.path.join(star_dir, 'Aligned.sortedByCoord.filtered.bam')
+
+        strand_options = ''
+        if library['strand'] == 'fr-firststrand':
+            strand_options = '--stranded'
+        elif library['strand'] == 'fr-secondstrand':
+            strand_options = '--stranded --stranded_fr_secondstrand'
+
+        qorts_dir = os.path.join(QORTS_DIR, library_name)
+        mkdir(qorts_dir)
+
+        printp('\n# drmr:job time_limit=2h processors={} memory={}g working_directory={}'.format(threads, memory_slurm, qorts_dir))
+        printp(qorts_command_template.format(memory_java, QORTS_JAR, strand_options, library_name, chrom_sizes, bam, gtf, qorts_dir), ioniced = True)
+
+    printp("""\n# drmr:wait""")
+
+    printp('\n# drmr:label qorts-multi')
+
+    # plot all the things
+    decoder_filename = os.path.join(QORTS_DIR, 'decoder.txt')
+    with open(decoder_filename, 'w') as decoder:
+        decoder.write('sample.ID\n')
+        for library_name, library in DATA.items():
+            decoder.write('{}\n'.format(library_name))
+
+    mkdir(os.path.join(QORTS_DIR, ANALYSIS_NAME))
+
+    printp('\n# drmr:job time_limit=2h processors={} memory={}g working_directory={}'.format(threads, memory_slurm, QORTS_DIR))
+    printp("""{} {}/ {} {}/""".format(QORTS_GEN_MULTI_QC, QORTS_DIR, decoder_filename, ANALYSIS_NAME), ioniced = True)
+
+    printp("""\n# drmr:wait""")
+
+
+def qorts_wig2bigwig(command_template=None, memory=1):
+    if command_template is None:
+        command_template = """wigToBigWig {wig} {chrom_sizes} {bigwig}"""
+
+    wigs = ['QC.wiggle.fwd.wig.gz', 'QC.wiggle.rev.wig.gz']
+    bigwigs = ['QC.wiggle.fwd.bw', 'QC.wiggle.rev.bw']
+
+    printp('\n# drmr:label qorts-wig2bigwig')
+
+    for library_name, library in sorted(DATA.items()):
+        genome = library['genome']
+        chrom_sizes = os.path.join(get_star_index(genome), 'chrNameLength.txt')
+        qorts_dir = os.path.join(QORTS_DIR, library_name)
+
+        printp('\n# drmr:job time_limit=1h processors=1 memory={}g working_directory={}'.format(memory, qorts_dir))
+        for wig, bigwig in zip(wigs, bigwigs):
+            printp(command_template.format(**locals()), ioniced = True)
+
+    printp("""\n# drmr:wait""")
+
+
+def size_factors():
+    """Get the size factors (needed for normalization in downstream analyses)"""
+
+    mkdir(SIZE_FACTORS_DIR)
+   
+    template = 'Rscript {src}/get_qorts_size_factors.R {qorts_dir}/ {decoder} {out}'
+
+    printp('\n# drmr:label size-factors')
+    printp('\n# drmr:job time_limit=1h processors=1 memory=5g working_directory={}'.format(SIZE_FACTORS_DIR))
+
+    src = SRC
+    qorts_dir = QORTS_DIR
+    decoder = os.path.join(QORTS_DIR, 'decoder.txt')
+    out = os.path.join(SIZE_FACTORS_DIR, 'size_factors.txt')
+    printp(template.format(**locals()))
+
+    printp("""\n# drmr:wait""")
+
+
+def samtools(mapq = 255, memory = 5, threads = 1):
+    """Filter the star-produced bam file"""
+
+    view_template = """samtools index {0}; samtools view -b -h -f 3 -F 4 -F 8 -F 256 -F 2048 -q {1} {2} {3} > {4}; samtools index {4}"""
+
+    printp('\n# drmr:label filter-star')
+
+    for library_name, library in sorted(DATA.items()):
+        genome = library['genome']
+        autosomes = ' '.join(get_autosomes(genome))
+        chromosomes = autosomes + ' chrX' if INCLUDE_X else autosomes
+        star_dir = get_star_dir(library_name)
+        star_bam = os.path.join(star_dir, "Aligned.sortedByCoord.out.bam")
+        filtered_star_bam_name = "Aligned.sortedByCoord.filtered.bam"
+
+        printp('\n# drmr:job time_limit=4h processors={} memory={}g working_directory={}'.format(threads, memory, star_dir))
+        printp(view_template.format(star_bam, mapq, star_bam, chromosomes, filtered_star_bam_name), ioniced = True)
+
+    printp("""\n# drmr:wait""")
+
+
+def versions():
+    """Print the versions of the software used"""
+
+    mkdir(VERSION_DIR)
+
+    printp("""\n#\n# Print versions of the software used\n#""")
+    printp("""\n# drmr:label versions""")
+    printp("""\n# drmr:job time_limit=00:01:00 working_directory={} memory=1g processors=1""".format(VERSION_DIR))
+
+    printp("STAR --version &> star.version")
+    printp("fastqc --version &> fastqc.version")
+    printp("samtools --version &> samtools.version")
+    printp("java -jar {} > qorts.version".format(QORTS_JAR))
+    printp("wigToBigWig &> wigToBigWig.version")
+    
+    printp("""\n# drmr:wait""")
+
+
+if __name__ == '__main__':
+    mkdir(WORK_PATH)
+
+    if os.path.exists(PIPELINE):
+        os.unlink(PIPELINE)
+
+    PIPELINE_FILE = open(PIPELINE, 'w')
+    printp = functools.partial(print_to_pipeline, PIPELINE_FILE)
+
+    printp('#!/bin/bash')
+    printp('# -*- mode: sh; coding: utf-8 -*-\n')
+
+    make_star_index(threads=10)
+    fastqc()
+    star()
+    samtools(mapq=255, memory=5, threads=4)
+    qorts()
+    qorts_wig2bigwig(memory=5)
+    size_factors()
+    versions()

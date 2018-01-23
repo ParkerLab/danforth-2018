@@ -1,0 +1,25 @@
+[Header],,,,,,,,,
+IEMFileVersion,4,,,,,,,,
+Investigator Name,keegan,,,,,,,,
+Experiment Name,Run_1625,,,,,,,,
+Date,Sep  3 2016  9:40AM,,,,,,,,
+Workflow,GenerateFASTQ,,,,,,,,
+Application,HiSeq FASTQ Only,,,,,,,,
+Assay,TruSeq LT,,,,,,,,
+Description,Run_1625,,,,,,,,
+Chemistry,Default,,,,,,,,
+,,,,,,,,,
+[Reads],,,,,,,,,
+76,,,,,,,,,
+76,,,,,,,,,
+,,,,,,,,,
+[Settings],,,,,,,,,
+,,,,,,,,,
+[Data],,,,,,,,,
+Lane,Sample_ID,Sample_Name,Sample_Plate,Sample_Well,I7_Index_ID,index,index2,Sample_Project,Description
+8,Sample_67029,67029_ACAGTG,,,,ACAGTG,,keegan,wtRNAseq1
+8,Sample_67030,67030_GCCAAT,,,,GCCAAT,,keegan,wtRNAseq2
+8,Sample_67031,67031_ATGTCA,,,,ATGTCA,,keegan,wtRNAseq3
+8,Sample_67032,67032_GATCAG,,,,GATCAG,,keegan,SdRNAseq1
+8,Sample_67033,67033_ACTGAT,,,,ACTGAT,,keegan,SdRNAseq2
+8,Sample_67034,67034_TTAGGC,,,,TTAGGC,,keegan,SdRNAseq3

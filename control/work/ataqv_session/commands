@@ -1,0 +1,2 @@
+ANALYSIS_PATH="${DANFORTH_HOME}/work/ataqv_session"
+mkdir -p $ANALYSIS_PATH && cd $ANALYSIS_PATH && mkarv -r calculate danforth_ataqv ${DANFORTH_HOME}/work/atacseq/results/ataqv/*ataqv.json.gz && cd -

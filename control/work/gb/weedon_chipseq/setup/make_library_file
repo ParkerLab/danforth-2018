@@ -1,0 +1,64 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+
+from pprint import pprint
+import collections
+import os
+import sys
+import re
+
+macs2_dir = sys.argv[1]
+
+# given the CSV files, print a data dictionary
+
+# dictionary format should be:
+# LIBRARIES = {
+#     'sample_1_unique_id': {
+#         'bedgraph' : '...',
+#         'genome' : '...',
+#         'macs2_out' : '...'
+#     },
+#     'sample_2_unique_id' ....
+# }
+
+
+def csv_file_to_sequencing_run(f):
+    return re.match('Run_(\d+).csv', os.path.basename(csv_file)).group(1)
+
+
+def lane_to_readgroup_name(lane):
+    return 'L{:03d}'.format(lane)
+
+
+def bedgraph_path(unique_id):
+    chipseq_processing_dir = os.path.join(os.getenv('DANFORTH_HOME'), 'work', 'weedon_chipseq', 'results')
+    return os.path.join(chipseq_processing_dir, 'macs2', '{}.broad_treat_pileup.bdg'.format(unique_id))
+
+
+def macs2_out_path(unique_id):
+    chipseq_processing_dir = os.path.join(os.getenv('DANFORTH_HOME'), 'work', 'weedon_chipseq', 'results')
+    return os.path.join(chipseq_processing_dir, 'macs2', '{}.macs2.out'.format(unique_id))
+
+
+LIBRARIES = {}
+SAMPLES = [x.replace('.broad_treat_pileup.bdg', '') for x in os.listdir(macs2_dir) if re.search('broad_treat_pileup.bdg$', x)]
+
+for sample in SAMPLES:
+
+    unique_id = sample
+    genome = 'hg19'
+
+    if unique_id not in LIBRARIES:
+        sample_information = {
+            'genome': genome,
+            'bedgraph': bedgraph_path(unique_id),
+            'macs2_out': macs2_out_path(unique_id),
+        }
+
+        LIBRARIES[unique_id] = sample_information
+
+
+# now print the dictionary
+LIBRARIES = collections.OrderedDict(sorted(LIBRARIES.items()))
+pprint(dict(LIBRARIES.items()), width=1)

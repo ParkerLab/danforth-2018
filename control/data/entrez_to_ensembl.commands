@@ -1,0 +1,4 @@
+mkdir -p entrez_to_ensembl
+cd entrez_to_ensembl
+wget ftp://ftp.ncbi.nih.gov/gene/DATA/gene2ensembl.gz -O entrez2ensembl.gz
+cd ..

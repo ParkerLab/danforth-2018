@@ -1,0 +1,32 @@
+echo "Performing the BLAT analysis of Masui et al PTF1a binding sites..."
+ANALYSIS="${DANFORTH_HOME}/work/masui_blat"
+DATA="${ANALYSIS}/data"
+WORK="${ANALYSIS}/results"
+
+HG19_FASTA="${DANFORTH_HOME}/data/fasta/hg19/hg19.fa"
+MM9_FASTA="${DANFORTH_HOME}/data/fasta/mm9/mm9.fa"
+
+mkdir -p $WORK
+mkdir -p $DATA
+
+# Prepare the sequences to be grepped
+# First hg19
+echo ">distal_site" > ${DATA}/ptf1a_binding_sites.hg19.fasta
+echo "AGCACAAGTGGCGACATTCCCATGGA" >> ${DATA}/ptf1a_binding_sites.hg19.fasta
+echo ">proximal_site" >> ${DATA}/ptf1a_binding_sites.hg19.fasta
+echo "AGCACAAGTGTTGGGATTCCCACGGGCA" >> ${DATA}/ptf1a_binding_sites.hg19.fasta
+
+# now mm9
+echo ">distal_site" > ${DATA}/ptf1a_binding_sites.mm9.fasta
+echo  "GGCACAAGTGGCGACATTCCCATGGA" >> ${DATA}/ptf1a_binding_sites.mm9.fasta
+echo ">proximal_site" >> ${DATA}/ptf1a_binding_sites.mm9.fasta
+echo "AGCACATGTGTTATGATTCCCACGGACT" >> ${DATA}/ptf1a_binding_sites.mm9.fasta
+
+# run the BLAT
+cd $WORK
+nohup blat -fastMap -minMatch=1 -minScore=20 -stepSize=5 -minIdentity=100 $HG19_FASTA ${DATA}/ptf1a_binding_sites.hg19.fasta ptf1a_sites.hg19.psl
+nohup blat -fastMap -minMatch=1 -minScore=20 -stepSize=5 -minIdentity=100 $MM9_FASTA ${DATA}/ptf1a_binding_sites.mm9.fasta ptf1a_sites.mm9.psl
+cat ptf1a_sites.hg19.psl | awk 'NR>5' | cut -f10,14,16,17 | awk '{print($2"\t"$3"\t"$4"\t"$1)}' > ptf1a_sites.hg19.bed
+cat ptf1a_sites.mm9.psl | awk 'NR>5' | cut -f10,14,16,17 | awk '{print($2"\t"$3"\t"$4"\t"$1)}' > ptf1a_sites.mm9.bed
+blat &> blat.version
+cd ${DANFORTH_HOME}

@@ -1,0 +1,10 @@
+mkdir -p fasta/mm9
+mkdir -p fasta/danforth
+mkdir -p fasta/hg19
+echo "Downloading mm9 fasta..."
+cd fasta/mm9 && wget -O mm9.tar.gz ftp://hgdownload.cse.ucsc.edu/goldenPath/mm9/bigZips/chromFa.tar.gz && tar -xvzf mm9.tar.gz && rm mm9.tar.gz && cp * ../danforth/ && cat *fa > mm9.fa && rm chr* && cd ..
+echo "Preparing danforth fasta..."
+cd danforth && ln -sf ${DANFORTH_HOME}/data/insertion/insertion.fasta JX863104.fasta && mv chr2.fa mm9.chr2.fasta && python ${DANFORTH_HOME}/src/insert_etn.py && rm mm9.chr2.fasta && mv mm9.chr2.etn.fasta chr2.fa && rm JX863104.fasta && cat *.fa > danforth.fa && rm chr*fa && cd ..
+echo "Preparing hg19 fasta..."
+cd hg19 && wget -O hg19.tar.gz ftp://hgdownload.cse.ucsc.edu/goldenPath/hg19/bigZips/chromFa.tar.gz && tar -xvzf hg19.tar.gz && rm hg19.tar.gz && cat *fa > hg19.fa && rm chr* && cd ..
+cd ..

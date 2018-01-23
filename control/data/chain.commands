@@ -1,0 +1,4 @@
+mkdir chain && cd chain
+echo "Downloading mm9 --> hg19 chain file..."
+wget http://hgdownload-test.cse.ucsc.edu/goldenPath/mm9/liftOver/mm9ToHg19.over.chain.gz
+cd ..

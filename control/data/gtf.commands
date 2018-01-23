@@ -1,0 +1,33 @@
+mkdir -p gtf/mm9
+mkdir -p gtf/danforth
+
+echo "Downloading mm9 gtf..."
+cd gtf/mm9 && wget ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_mouse/release_M1/gencode.vM1.annotation.gtf.gz && zcat gencode.vM1.annotation.gtf.gz > mm9.gtf && cd ..
+echo "Preparing Danforth gtf..."
+cd danforth 
+cat ../mm9/mm9.gtf | ${DANFORTH_HOME}/src/shift_danforth_gtf.py -v 2> shifts.txt > danforth.no_insertion.gtf  # danforth GTF shifted but without the insertion
+ORIGINAL_GTF="danforth.no_insertion.gtf"
+
+# names for the new GTF files to be created
+GTF_WITH_INSERTION="danforth.insertion.gtf" # danforth GTF with the insertion
+
+rm -f insertion_lines.txt
+
+# first generate the lines of interest
+# from the insertion:
+INSERTION_STRAND="-"
+INSERTION_START="19355021"
+INSERTION_END="19363565"
+printf "chr2\tCUSTOM\tgene\t19355026\t${INSERTION_END}\t.\t${INSERTION_STRAND}\t.\tgene_id \"INSERTION\"; transcript_id \"INSERTION\"; gene_type \"INSERTION\"\n" > insertion_lines.txt
+printf "chr2\tCUSTOM\ttranscript\t19355026\t${INSERTION_END}\t.\t${INSERTION_STRAND}\t.\tgene_id \"INSERTION\"; transcript_id \"INSERTION\"; gene_type \"INSERTION\"\n" >> insertion_lines.txt
+printf "chr2\tCUSTOM\texon\t19355026\t${INSERTION_END}\t.\t${INSERTION_STRAND}\t.\tgene_id \"INSERTION\"; transcript_id \"INSERTION\"; gene_type \"INSERTION\"\n" >> insertion_lines.txt
+printf "chr2\tCUSTOM\tCDS\t19355026\t${INSERTION_END}\t.\t${INSERTION_STRAND}\t.\tgene_id \"INSERTION\"; transcript_id \"INSERTION\"; gene_type \"INSERTION\"\n" >> insertion_lines.txt
+
+# now create the gtf with the insertion
+grep "^#" $ORIGINAL_GTF > $GTF_WITH_INSERTION
+cat $ORIGINAL_GTF insertion_lines.txt | grep -v "^#" | sort -k1,1 -k4n,4 >> $GTF_WITH_INSERTION
+
+# clean up
+rm insertion_lines.txt
+
+cd ../..

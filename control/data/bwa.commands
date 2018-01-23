@@ -1,0 +1,80 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+
+import functools
+import itertools
+import os
+import re
+
+from john_utilities import mkdir
+
+ROOT = os.getenv('DANFORTH_HOME')
+
+ANALYSIS_PATH = os.path.join(ROOT, 'data', 'bwa')
+PIPELINE = os.path.join(ANALYSIS_PATH, 'pipeline')
+
+GENOMES = ['mm9', 'danforth', 'hg19']
+
+VERSION_DIR = os.path.join(ANALYSIS_PATH, 'bwa_version')
+
+
+def get_fasta(genome):
+    return os.path.join(ROOT, 'data', 'fasta', genome, '{}.fa'.format(genome))
+
+
+def print_to_pipeline(pipeline_file, text=None, timed=False, ioniced=False):
+    """The primary function of all this: writing to a drmr script."""
+    if text:
+        if timed:
+            pipeline_file.write('/usr/bin/time -v ')
+        if ioniced:
+            pipeline_file.write('ionice -c 2 -n 7 ')
+        pipeline_file.write(text)
+        pipeline_file.write('\n')
+
+
+def make_indices():
+    
+    printp("""\n#\n# Make bwa indices\n#""")
+    printp("""\n# drmr:label index""")
+    printp("""\n# drmr:job time_limit=08:00:00 working_directory={} memory=10g processors=1""".format(ANALYSIS_PATH))
+
+    template = 'mkdir -p {genome} && cd {genome} && ln -sf {fasta} . && bwa index {genome}.fa'
+
+    for genome in GENOMES:
+        fasta = get_fasta(genome)
+        printp(template.format(**locals()))
+    
+    printp("""\n# drmr:wait""")
+
+
+def versions():
+    """Print the versions of the software used"""
+
+    mkdir(VERSION_DIR)
+
+    printp("""\n#\n# Print versions of the software used\n#""")
+    printp("""\n# drmr:label versions""")
+    printp("""\n# drmr:job time_limit=00:01:00 working_directory={} memory=1g processors=1""".format(VERSION_DIR))
+
+    printp("bwa &> bwa.version")
+    
+    printp("""\n# drmr:wait""")
+
+
+if __name__ == '__main__':
+    
+    mkdir(ANALYSIS_PATH)
+
+    if os.path.exists(PIPELINE):
+        os.unlink(PIPELINE)
+
+    PIPELINE_FILE = open(PIPELINE, 'w')
+    printp = functools.partial(print_to_pipeline, PIPELINE_FILE)
+
+    printp('#!/bin/bash')
+    printp('# -*- mode: sh; coding: utf-8 -*-\n')
+
+    make_indices()
+    versions()
